@@ -30,6 +30,42 @@ function parseBoundedNumber(
   return Math.min(maximum, Math.max(minimum, raw));
 }
 
+async function callConfiguredInferenceService(
+  image: File,
+  cameraHeight: number,
+  fov: number,
+) {
+  const { env } = await import("cloudflare:workers");
+  const serviceEnv = env as unknown as {
+    AI_SERVICE_URL?: string;
+    AI_SERVICE_TOKEN?: string;
+  };
+  const baseUrl = serviceEnv.AI_SERVICE_URL?.trim().replace(/\/$/, "");
+  if (!baseUrl) return null;
+
+  const body = new FormData();
+  body.append("image", image, image.name);
+  body.append("camera_height", String(cameraHeight));
+  body.append("fov", String(fov));
+
+  const response = await fetch(`${baseUrl}/v1/analyze`, {
+    method: "POST",
+    headers: serviceEnv.AI_SERVICE_TOKEN
+      ? { authorization: `Bearer ${serviceEnv.AI_SERVICE_TOKEN}` }
+      : undefined,
+    body,
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === "object" && "detail" in payload
+        ? String(payload.detail)
+        : "The configured inference service failed.";
+    throw new Error(detail);
+  }
+  return payload;
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
@@ -50,6 +86,9 @@ export async function POST(request: Request) {
 
     const cameraHeight = parseBoundedNumber(formData, "cameraHeight", 3, 1, 8);
     const fov = parseBoundedNumber(formData, "fov", 60, 30, 120);
+    const serviceResult = await callConfiguredInferenceService(image, cameraHeight, fov);
+    if (serviceResult) return Response.json(serviceResult);
+
     const bytes = await image.arrayBuffer();
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 

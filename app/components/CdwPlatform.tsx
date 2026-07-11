@@ -74,7 +74,7 @@ type MaterialResult = {
 
 type AnalysisResult = {
   analysisId: string;
-  mode: "prototype";
+  mode: "prototype" | "model";
   dominantMaterial: string;
   confidence: number;
   manualReviewRequired: boolean;
