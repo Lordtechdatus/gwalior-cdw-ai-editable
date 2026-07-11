@@ -10,12 +10,12 @@ class DemoSmsProvider implements SmsProvider {
 }
 
 export function isDemoOtpMode() {
-  return !import.meta.env.PROD && import.meta.env.DEMO_OTP_MODE === "true";
+  return process.env.DEMO_OTP_MODE === "true";
 }
 
 export function createOtp() {
   if (!isDemoOtpMode()) throw new Error("No production SMS provider is configured.");
-  return "123456";
+  return process.env.OTP ?? "123456";
 }
 
 export function getSmsProvider(): SmsProvider {

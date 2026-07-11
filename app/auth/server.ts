@@ -125,9 +125,11 @@ export function canResend(mobile: string) {
 }
 
 export async function createSession(mobile: string, role: CdwRole) {
-  const token = randomToken();
-  sessions.set(await digest(token), { mobile, role, expiresAt: Date.now() + SESSION_LIFETIME_MS });
-  return token;
+  const payload = Buffer.from(JSON.stringify({ mobile, role, expiresAt: Date.now() + SESSION_LIFETIME_MS })).toString("base64url");
+  const secret = process.env.AUTH_OTP_HASH_SECRET ?? "local-development-only";
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload))).toString("base64url");
+  return `${payload}.${signature}`;
 }
 
 function cookieValue(request: Request, name: string) {
@@ -142,13 +144,20 @@ function cookieValue(request: Request, name: string) {
 export async function getSession(request: Request) {
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return null;
-  const key = await digest(token);
-  const session = sessions.get(key);
-  if (!session || session.expiresAt <= Date.now()) {
-    sessions.delete(key);
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return null;
+  const secret = process.env.AUTH_OTP_HASH_SECRET ?? "local-development-only";
+  const hmacKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  const valid = await crypto.subtle.verify("HMAC", hmacKey, Buffer.from(signature, "base64url"), new TextEncoder().encode(payload));
+  if (!valid) return null;
+  try {
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as SessionRecord;
+    if (session.expiresAt <= Date.now()) return null;
+    if (session.role !== "generator" && session.role !== "recycler" && session.role !== "authority") return null;
+    return { key: token, ...session };
+  } catch {
     return null;
   }
-  return { key, ...session };
 }
 
 export async function requireRole(request: Request, allowed: CdwRole[]) {
@@ -170,8 +179,7 @@ export async function selectSessionRole(request: Request, role: unknown) {
 }
 
 export async function destroySession(request: Request) {
-  const token = cookieValue(request, SESSION_COOKIE);
-  if (token) sessions.delete(await digest(token));
+  void request;
 }
 
 export function sessionCookie(token: string) {

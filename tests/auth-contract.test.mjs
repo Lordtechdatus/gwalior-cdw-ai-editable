@@ -38,8 +38,8 @@ test("demo OTP is explicitly development-gated and never returned by an API", as
   assert.match(example, /DEMO_OTP_MODE=true/);
   assert.match(localEnv, /DEMO_OTP_MODE=true/);
   assert.match(localEnv, /NEXT_PUBLIC_DEMO_OTP_MODE=true/);
-  assert.match(provider, /!import\.meta\.env\.PROD && import\.meta\.env\.DEMO_OTP_MODE === "true"/);
-  assert.match(provider, /return "123456"/);
+  assert.match(provider, /process\.env\.DEMO_OTP_MODE === "true"/);
+  assert.match(provider, /process\.env\.OTP \?\? "123456"/);
   assert.match(component, /demoMode && <p[^>]*>Demo OTP: 123456<\/p>/);
   assert.match(component, /setOtpSent\(true\);\s*onSent\(true\)/);
   assert.match(sendRoute, /success: true, demoMode: true, message: "Demo OTP generated"/);

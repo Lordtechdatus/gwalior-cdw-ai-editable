@@ -599,7 +599,7 @@ function MobileEntry({ role, mobile, onMobileChange, onSent, onBack }: { role: R
   const [sending, setSending] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const valid = /^[6-9]\d{9}$/.test(mobile);
-  const clientDemoMode = import.meta.env.DEV && import.meta.env.NEXT_PUBLIC_DEMO_OTP_MODE === "true";
+  const clientDemoMode = process.env.NEXT_PUBLIC_DEMO_OTP_MODE === "true";
 
   async function sendOtp(event: React.FormEvent) {
     event.preventDefault();

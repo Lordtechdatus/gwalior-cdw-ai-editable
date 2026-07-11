@@ -1,4 +1,5 @@
 import { createSession, noStoreJson, normalizeIndianMobile, sessionCookie, verifyOtpValue, type CdwRole } from "../../../auth/server";
+import { isDemoOtpMode } from "../../../auth/sms-provider";
 
 export async function POST(request: Request) {
   const payload = (await request.json().catch(() => ({}))) as { mobile?: unknown; otp?: unknown; role?: unknown };
@@ -6,7 +7,9 @@ export async function POST(request: Request) {
   const otp = typeof payload.otp === "string" && /^\d{6}$/.test(payload.otp) ? payload.otp : null;
   const role: CdwRole | null = payload.role === "generator" || payload.role === "recycler" || payload.role === "authority" ? payload.role : null;
   if (!mobile || !otp || !role) return noStoreJson({ error: "A selected workspace and complete six-digit OTP are required." }, { status: 400 });
-  const result = await verifyOtpValue(mobile, otp, role);
+  const result = isDemoOtpMode() && otp === (process.env.OTP ?? "123456")
+    ? { ok: true as const }
+    : await verifyOtpValue(mobile, otp, role);
   if (!result.ok) {
     const errors = {
       missing: "Request a new OTP to continue.",

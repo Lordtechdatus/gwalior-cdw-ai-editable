@@ -35,12 +35,7 @@ async function callConfiguredInferenceService(
   cameraHeight: number,
   fov: number,
 ) {
-  const { env } = await import("cloudflare:workers");
-  const serviceEnv = env as unknown as {
-    AI_SERVICE_URL?: string;
-    AI_SERVICE_TOKEN?: string;
-  };
-  const baseUrl = serviceEnv.AI_SERVICE_URL?.trim().replace(/\/$/, "");
+  const baseUrl = process.env.AI_SERVICE_URL?.trim().replace(/\/$/, "");
   if (!baseUrl) return null;
 
   const body = new FormData();
@@ -50,8 +45,8 @@ async function callConfiguredInferenceService(
 
   const response = await fetch(`${baseUrl}/v1/analyze`, {
     method: "POST",
-    headers: serviceEnv.AI_SERVICE_TOKEN
-      ? { authorization: `Bearer ${serviceEnv.AI_SERVICE_TOKEN}` }
+    headers: process.env.AI_SERVICE_TOKEN
+      ? { authorization: `Bearer ${process.env.AI_SERVICE_TOKEN}` }
       : undefined,
     body,
   });
