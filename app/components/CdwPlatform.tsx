@@ -50,6 +50,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 type Role = "generator" | "recycler" | "authority";
 type Screen = "role-selection" | "generator-login" | "recycler-login" | "authority-login" | "otp-verification" | "generator-dashboard" | "recycler-dashboard" | "authority-dashboard";
 type AuthSession = { authenticated: boolean; mobile?: string; role?: Role | null };
+type AuthenticatedSession = { authenticated: true; mobile: string; role: Role };
 type ReportStatus =
   | "Submitted"
   | "Processing"
@@ -240,6 +241,21 @@ function formatCo2(co2Kg: number) {
     : `${sign}${value.toFixed(0)} kg`;
 }
 
+async function readJsonResponse<T>(response: Response, label: string): Promise<T> {
+  const responseText = await response.text();
+  if (!responseText.trim()) {
+    throw new Error(`${label} returned an empty response (HTTP ${response.status}).`);
+  }
+  try {
+    return JSON.parse(responseText) as T;
+  } catch {
+    const serverError = responseText.trim().slice(0, 300);
+    throw new Error(
+      `${label} returned invalid JSON (HTTP ${response.status}): ${serverError}`,
+    );
+  }
+}
+
 export default function CdwPlatform({ viewer }: { viewer: Viewer }) {
   const [screen, setScreen] = useState<Screen>("role-selection");
   const [role, setRole] = useState<Role>("generator");
@@ -254,8 +270,13 @@ export default function CdwPlatform({ viewer }: { viewer: Viewer }) {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/auth/session", { cache: "no-store" })
-      .then(async (response) => (response.ok ? (await response.json()) as AuthSession : { authenticated: false }))
+    fetch("/api/auth/session", { cache: "no-store", credentials: "include" })
+      .then(async (response) => {
+        const current = await readJsonResponse<AuthSession>(response, "Session check");
+        if (response.status === 401) return { authenticated: false } as AuthSession;
+        if (!response.ok) throw new Error("Unable to verify the current session.");
+        return current;
+      })
       .then((current) => {
         if (!active) return;
         setSession(current);
@@ -267,6 +288,7 @@ export default function CdwPlatform({ viewer }: { viewer: Viewer }) {
           }
         }
       })
+      .catch(() => active && setSession({ authenticated: false }))
       .finally(() => active && setAuthLoading(false));
     return () => { active = false; };
   }, []);
@@ -305,7 +327,7 @@ export default function CdwPlatform({ viewer }: { viewer: Viewer }) {
   }
 
   async function logout(changeNumber = false) {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     setSession({ authenticated: false });
     setDemoMode(false);
     setRole("generator");
@@ -343,15 +365,16 @@ export default function CdwPlatform({ viewer }: { viewer: Viewer }) {
           mobile={mobile}
           role={role}
           demoMode={demoMode}
-          onVerified={(verifiedRole) => {
-            if (verifiedRole !== role) {
+          onVerified={(verifiedSession) => {
+            if (verifiedSession.role !== role) {
               setToast("You are not authorized to access this workspace.");
               setScreen("role-selection");
               return;
             }
-            setSession({ authenticated: true, mobile, role: verifiedRole });
-            setRole(verifiedRole);
-            setScreen(dashboardScreenFor(verifiedRole));
+            setSession(verifiedSession);
+            setMobile(verifiedSession.mobile);
+            setRole(verifiedSession.role);
+            setScreen(dashboardScreenFor(verifiedSession.role));
             setToast("Mobile number verified successfully");
           }}
           onChangeMobile={() => { setMobile(""); setDemoMode(false); setScreen(loginScreenFor(role)); }}
@@ -611,14 +634,15 @@ function MobileEntry({ role, mobile, onMobileChange, onSent, onBack }: { role: R
       onSent(true);
       void fetch("/api/auth/send-otp", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mobile, role }),
       }).catch(() => undefined);
       return;
     }
     try {
-      const response = await fetch("/api/auth/send-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile, role }) });
-      const body = await response.json() as { error?: string; success?: boolean; demoMode?: boolean };
+      const response = await fetch("/api/auth/send-otp", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile, role }) });
+      const body = await readJsonResponse<{ error?: string; success?: boolean; demoMode?: boolean }>(response, "OTP request");
       if (!response.ok) throw new Error(body.error ?? "Unable to send OTP.");
       setOtpSent(body.success === true);
       onSent(body.demoMode === true);
@@ -654,7 +678,7 @@ function formatOtpTime(seconds: number) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function OtpVerification({ role, mobile, demoMode, onVerified, onChangeMobile }: { role: Role; mobile: string; demoMode: boolean; onVerified: (role: Role) => void; onChangeMobile: () => void }) {
+function OtpVerification({ role, mobile, demoMode, onVerified, onChangeMobile }: { role: Role; mobile: string; demoMode: boolean; onVerified: (session: AuthenticatedSession) => void; onChangeMobile: () => void }) {
   const [digits, setDigits] = useState(["", "", "", "", "", ""]);
   const [remaining, setRemaining] = useState(600);
   const [resendRemaining, setResendRemaining] = useState(60);
@@ -702,11 +726,28 @@ function OtpVerification({ role, mobile, demoMode, onVerified, onChangeMobile }:
     if (otp.length !== 6) { setError("Enter the complete six-digit OTP."); return; }
     setProcessing(true); setError("");
     try {
-      const response = await fetch("/api/auth/verify-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile, otp, role }) });
-      const body = await response.json() as { error?: string; role?: Role };
+      const response = await fetch("/api/auth/verify-otp", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile, otp, role }) });
+      const body = await readJsonResponse<{ error?: string; role?: Role }>(response, "OTP verification");
       if (!response.ok) throw new Error(body.error ?? "OTP verification failed.");
       if (!body.role) throw new Error("You are not authorized to access this workspace.");
-      onVerified(body.role);
+      const sessionResponse = await fetch("/api/auth/session", {
+        cache: "no-store",
+        credentials: "include",
+      });
+      const currentSession = await readJsonResponse<AuthSession>(sessionResponse, "Session refresh");
+      if (
+        !sessionResponse.ok ||
+        !currentSession.authenticated ||
+        !currentSession.mobile ||
+        !currentSession.role
+      ) {
+        throw new Error("The login cookie was not accepted. Please verify the OTP again.");
+      }
+      onVerified({
+        authenticated: true,
+        mobile: currentSession.mobile,
+        role: currentSession.role,
+      });
     } catch (caught) { setError(caught instanceof Error ? caught.message : "OTP verification failed."); }
     finally { setProcessing(false); }
   }
@@ -715,8 +756,8 @@ function OtpVerification({ role, mobile, demoMode, onVerified, onChangeMobile }:
     if (resendRemaining > 0) return;
     setProcessing(true); setError("");
     try {
-      const response = await fetch("/api/auth/resend-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile, role }) });
-      const body = await response.json() as { error?: string; demoMode?: boolean };
+      const response = await fetch("/api/auth/resend-otp", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mobile, role }) });
+      const body = await readJsonResponse<{ error?: string; demoMode?: boolean }>(response, "OTP resend");
       if (!response.ok) throw new Error(body.error ?? "Unable to resend OTP.");
       if (body.demoMode !== demoMode) throw new Error("OTP mode changed. Please enter your mobile number again.");
       setDigits(["", "", "", "", "", ""]); setRemaining(600); setResendRemaining(60); window.setTimeout(() => refs.current[0]?.focus(), 0);
@@ -1267,6 +1308,7 @@ function NewWasteReport({
       formData.append("fov", fov);
       const response = await fetch("/api/analyze", {
         method: "POST",
+        credentials: "include",
         body: formData,
         signal: controller.signal,
       });
@@ -1317,24 +1359,23 @@ function NewWasteReport({
       uploadData.append("image", file);
       const uploadResponse = await fetch("/api/uploads", {
         method: "POST",
+        credentials: "include",
         body: uploadData,
       });
 
-      if (uploadResponse.status === 401) {
-        onSubmitted(analysis, { siteName, location });
-        return;
-      }
-
-      const uploadPayload = (await uploadResponse.json()) as {
+      const uploadPayload = await readJsonResponse<{
+        success?: boolean;
         objectKey?: string;
         error?: string;
-      };
+        details?: string;
+      }>(uploadResponse, "Image upload");
       if (!uploadResponse.ok || !uploadPayload.objectKey) {
-        throw new Error(uploadPayload.error ?? "The site image could not be stored.");
+        throw new Error(uploadPayload.details ?? uploadPayload.error ?? "The site image could not be stored.");
       }
 
       const reportResponse = await fetch("/api/reports", {
         method: "POST",
+        credentials: "include",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           siteName,
@@ -1345,10 +1386,10 @@ function NewWasteReport({
           analysis,
         }),
       });
-      const reportPayload = (await reportResponse.json()) as {
+      const reportPayload = await readJsonResponse<{
         report?: { id?: string };
         error?: string;
-      };
+      }>(reportResponse, "Report submission");
       if (!reportResponse.ok || !reportPayload.report?.id) {
         throw new Error(reportPayload.error ?? "The report could not be saved.");
       }

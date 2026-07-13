@@ -25,14 +25,42 @@ if (!verifyOtp.ok) throw new Error(`OTP verification failed with HTTP ${verifyOt
 const cookie = verifyOtp.headers.getSetCookie()[0]?.split(";", 1)[0];
 if (!cookie) throw new Error("OTP verification did not return a session cookie.");
 
-const formData = new FormData();
-formData.append(
-  "image",
-  new File(
+const sessionResponse = await fetch(`${baseUrl}/api/auth/session`, {
+  headers: { cookie },
+});
+const sessionText = await sessionResponse.text();
+const session = JSON.parse(sessionText);
+if (!sessionResponse.ok || session.authenticated !== true || session.role !== "generator") {
+  throw new Error(`Session refresh failed with HTTP ${sessionResponse.status}.`);
+}
+
+function imageFile() {
+  return new File(
     [Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])],
     "site.png",
     { type: "image/png" },
-  ),
+  );
+}
+
+const uploadForm = new FormData();
+uploadForm.append("image", imageFile());
+const uploadResponse = await fetch(`${baseUrl}/api/uploads`, {
+  method: "POST",
+  headers: { cookie },
+  body: uploadForm,
+});
+const uploadText = await uploadResponse.text();
+const upload = JSON.parse(uploadText);
+if (!uploadResponse.ok || upload.success !== true || !upload.objectKey) {
+  throw new Error(
+    `Upload failed (HTTP ${uploadResponse.status}): ${upload.details ?? upload.error ?? "unknown error"}`,
+  );
+}
+
+const formData = new FormData();
+formData.append(
+  "image",
+  imageFile(),
 );
 formData.append("cameraHeight", "3");
 formData.append("fov", "60");
@@ -65,6 +93,10 @@ console.log(
     {
       sendOtpStatus: sendOtp.status,
       verifyOtpStatus: verifyOtp.status,
+      sessionStatus: sessionResponse.status,
+      authenticated: session.authenticated,
+      uploadStatus: uploadResponse.status,
+      uploadBodyEmpty: uploadText.length === 0,
       analyzeStatus: response.status,
       contentType: response.headers.get("content-type"),
       responseBodyEmpty: responseText.length === 0,

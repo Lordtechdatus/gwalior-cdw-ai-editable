@@ -13,7 +13,7 @@ A role-based Next.js platform for construction and demolition waste reporting, i
 - Next.js App Router for the interface and all API route handlers.
 - PostgreSQL through Drizzle ORM. Vercel Postgres, Neon, and Supabase PostgreSQL connection strings are supported.
 - Vercel Blob for production image uploads.
-- Local filesystem storage under `public/uploads` during development when Blob is not configured.
+- Same-origin filesystem storage under `public/uploads` when Blob is not configured.
 - Optional external Python inference service, with a deterministic prototype analyser as the fallback.
 
 The project does not require Vinext, Vite, Wrangler, Cloudflare Workers, D1, R2, Bash, `flock`, or GNU `timeout`.
@@ -36,7 +36,7 @@ OTP=123456
 AUTH_OTP_HASH_SECRET=replace-with-a-long-random-secret
 ```
 
-`POSTGRES_URL` (or `DATABASE_URL`) is required for report persistence. `BLOB_READ_WRITE_TOKEN` is required for uploads on Vercel but optional locally. Add the same values in the Vercel project settings before deployment.
+`POSTGRES_URL` (or `DATABASE_URL`) is required for report persistence. `BLOB_READ_WRITE_TOKEN` is optional; without it, uploads use same-origin storage under `public/uploads`. Render's default filesystem is ephemeral, so configure a persistent disk or Blob storage when uploaded images must survive a redeploy or restart.
 
 `CDW_INFERENCE_MODE=prototype` makes `/api/analyze` generate deterministic local mock analysis and does not call `AI_API_URL`, `AI_SERVICE_URL`, localhost inference services, PostgreSQL, or Blob storage. External inference is used only when `CDW_INFERENCE_MODE=production`; then configure `AI_API_URL` or `AI_SERVICE_URL` (for example, `https://ai.example.com`). `NEXT_PUBLIC_AI_API_URL` is also accepted for deployment compatibility, but API keys and service tokens must stay server-only; never put secrets in `NEXT_PUBLIC_*` variables.
 
