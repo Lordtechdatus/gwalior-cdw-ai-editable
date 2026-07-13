@@ -8,8 +8,8 @@ type MaterialDefinition = {
 };
 
 const AI_REQUEST_TIMEOUT_MS = 30_000;
-const AI_UNAVAILABLE_MESSAGE =
-  "AI service unavailable. Please start the AI API or try again.";
+const AI_UNAVAILABLE_MESSAGE = "AI analysis service unavailable";
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 class AiServiceUnavailableError extends Error {
   constructor(cause?: unknown) {
@@ -25,6 +25,8 @@ const MATERIALS: MaterialDefinition[] = [
   { name: "Steel", density: 7850, co2PerM3: 15700, color: "#8fb7d9" },
   { name: "Wood", density: 600, co2PerM3: -360, color: "#d7aa68" },
 ];
+
+export const runtime = "nodejs";
 
 function round(value: number, digits = 4) {
   const factor = 10 ** digits;
@@ -43,24 +45,68 @@ function parseBoundedNumber(
   return Math.min(maximum, Math.max(minimum, raw));
 }
 
+function errorDetails(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return "Unknown server error.";
+}
+
+function serviceUnavailableResponse(error: unknown, status = 500) {
+  return Response.json(
+    {
+      error: AI_UNAVAILABLE_MESSAGE,
+      details: errorDetails(error),
+    },
+    { status },
+  );
+}
+
+function isPrototypeMode() {
+  const mode = process.env.AI_ANALYSIS_MODE?.trim().toLowerCase();
+  return (
+    mode === "prototype" ||
+    mode === "demo" ||
+    process.env.AI_DEMO_MODE === "true" ||
+    process.env.DEMO_MODE === "true"
+  );
+}
+
+function configuredAiBaseUrl() {
+  const configuredUrl =
+    process.env.AI_API_URL?.trim() || process.env.NEXT_PUBLIC_AI_API_URL?.trim();
+  if (!configuredUrl) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(configuredUrl);
+  } catch {
+    throw new Error("AI_API_URL or NEXT_PUBLIC_AI_API_URL must be a valid URL.");
+  }
+
+  const isLocalhost =
+    parsed.hostname === "localhost" ||
+    parsed.hostname === "127.0.0.1" ||
+    parsed.hostname === "::1";
+  if (process.env.NODE_ENV === "production" && isLocalhost) {
+    throw new Error("AI backend URL cannot use localhost in production.");
+  }
+
+  return parsed.toString().replace(/\/$/, "");
+}
+
 async function callConfiguredInferenceService(
   image: File,
   cameraHeight: number,
   fov: number,
 ) {
-  // VITE_AI_API_URL is intentionally read on the server so service tokens and
-  // deployment topology are not exposed to the browser. Localhost is only a
-  // development default; production falls back to the prototype analyser.
-  const prototypeMode =
-    process.env.AI_ANALYSIS_MODE?.trim().toLowerCase() === "prototype" ||
-    process.env.DEMO_OTP_MODE === "true";
-  if (prototypeMode) return null;
+  if (isPrototypeMode()) return null;
 
-  const configuredUrl = process.env.VITE_AI_API_URL?.trim();
-  const baseUrl = (configuredUrl ||
-    (process.env.NODE_ENV === "development" ? "http://localhost:8000" : ""))
-    .replace(/\/$/, "");
-  if (!baseUrl) return null;
+  const baseUrl = configuredAiBaseUrl();
+  if (!baseUrl) {
+    throw new Error(
+      "AI_API_URL or NEXT_PUBLIC_AI_API_URL must be configured unless prototype/demo mode is enabled.",
+    );
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
@@ -80,9 +126,11 @@ async function callConfiguredInferenceService(
       throw new Error(`Health check returned HTTP ${healthResponse.status}.`);
     }
 
-    const health = (await healthResponse.json()) as { status?: unknown };
-    if (health.status !== "ok") {
-      throw new Error(`Health check returned status ${String(health.status)}.`);
+    const health = (await healthResponse.json().catch(() => null)) as {
+      status?: unknown;
+    } | null;
+    if (health?.status !== "ok") {
+      throw new Error(`Health check returned status ${String(health?.status)}.`);
     }
 
     const response = await fetch(`${baseUrl}/v1/analyze`, {
@@ -93,7 +141,7 @@ async function callConfiguredInferenceService(
       body,
       signal: controller.signal,
     });
-    const payload = (await response.json()) as unknown;
+    const payload = (await response.json().catch(() => null)) as unknown;
     if (!response.ok) {
       const detail =
         payload && typeof payload === "object" && "detail" in payload
@@ -114,21 +162,48 @@ async function callConfiguredInferenceService(
 }
 
 export async function POST(request: Request) {
-  const authorization = await requireRole(request, ["generator"]);
-  if (!authorization.ok) return authorization.response;
   try {
+    const authorization = await requireRole(request, ["generator"]);
+    if (!authorization.ok) return authorization.response;
+
+    const contentType = request.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().includes("multipart/form-data")) {
+      return Response.json(
+        {
+          error: "An image file is required.",
+          details: "POST /api/analyze expects multipart/form-data with an image field.",
+        },
+        { status: 415 },
+      );
+    }
+
     const formData = await request.formData();
     const image = formData.get("image");
 
-    if (!(image instanceof File)) {
-      return Response.json({ error: "An image file is required." }, { status: 400 });
+    if (!image || typeof image === "string") {
+      return Response.json(
+        {
+          error: "An image file is required.",
+          details: "Upload the image as a multipart file field named image.",
+        },
+        { status: 400 },
+      );
     }
     if (!image.type.startsWith("image/")) {
-      return Response.json({ error: "Only image uploads are accepted." }, { status: 415 });
-    }
-    if (image.size === 0 || image.size > 10 * 1024 * 1024) {
       return Response.json(
-        { error: "The image must be between 1 byte and 10 MB." },
+        {
+          error: "Only image uploads are accepted.",
+          details: `Received content type ${image.type || "unknown"}.`,
+        },
+        { status: 415 },
+      );
+    }
+    if (image.size === 0 || image.size > MAX_IMAGE_BYTES) {
+      return Response.json(
+        {
+          error: "The image must be between 1 byte and 10 MB.",
+          details: `Received ${image.size} bytes.`,
+        },
         { status: 413 },
       );
     }
@@ -196,15 +271,10 @@ export async function POST(request: Request) {
         "Deterministic prototype output. Replace this adapter with the validated classification, segmentation, and calibrated depth service before field use.",
     });
   } catch (error) {
+    console.error("[api/analyze] POST failed", error);
     if (error instanceof AiServiceUnavailableError) {
-      return Response.json({ error: AI_UNAVAILABLE_MESSAGE }, { status: 503 });
+      return serviceUnavailableResponse(error.cause ?? error, 503);
     }
-    console.error("[waste-analysis] Analysis request failed", error);
-    return Response.json(
-      {
-        error: error instanceof Error ? error.message : "Unable to analyse the image.",
-      },
-      { status: 500 },
-    );
+    return serviceUnavailableResponse(error, 500);
   }
 }

@@ -25,7 +25,8 @@ Copy `.env.example` to `.env.local` and configure:
 ```dotenv
 POSTGRES_URL=postgres://postgres:postgres@localhost:5432/gwalior_cdw
 BLOB_READ_WRITE_TOKEN=
-VITE_AI_API_URL=
+AI_API_URL=
+NEXT_PUBLIC_AI_API_URL=
 AI_ANALYSIS_MODE=prototype
 AI_SERVICE_TOKEN=
 DEMO_OTP_MODE=true
@@ -36,7 +37,7 @@ AUTH_OTP_HASH_SECRET=replace-with-a-long-random-secret
 
 `POSTGRES_URL` (or `DATABASE_URL`) is required for report persistence. `BLOB_READ_WRITE_TOKEN` is required for uploads on Vercel but optional locally. Add the same values in the Vercel project settings before deployment.
 
-`VITE_AI_API_URL` configures the optional inference API (for example, `https://ai.example.com`). During local development only, it defaults to `http://localhost:8000`. Set `AI_ANALYSIS_MODE=prototype` for deterministic demo results without an external AI provider. For external inference, set `AI_ANALYSIS_MODE=production` and configure `VITE_AI_API_URL` in production.
+`AI_API_URL` configures the optional inference API (for example, `https://ai.example.com`). `NEXT_PUBLIC_AI_API_URL` is also accepted for deployment compatibility, but API keys and service tokens must stay server-only; never put secrets in `NEXT_PUBLIC_*` variables. Set `AI_ANALYSIS_MODE=prototype` or `AI_DEMO_MODE=true` for deterministic demo results without an external AI provider. For external inference, set `AI_ANALYSIS_MODE=production` and configure `AI_API_URL` in production.
 
 ## Database
 
