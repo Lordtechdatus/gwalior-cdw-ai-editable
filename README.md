@@ -36,7 +36,7 @@ OTP=123456
 AUTH_OTP_HASH_SECRET=replace-with-a-long-random-secret
 ```
 
-`POSTGRES_URL` (or `DATABASE_URL`) is required for report persistence. In `CDW_INFERENCE_MODE=prototype`, image storage is disabled and `BLOB_READ_WRITE_TOKEN` is ignored. In production mode, configure a valid Vercel `BLOB_READ_WRITE_TOKEN` on Render.
+`POSTGRES_URL` is required for report persistence. On Render, set it to the database's internal PostgreSQL URL; production rejects localhost URLs. In `CDW_INFERENCE_MODE=prototype`, image storage is disabled and `BLOB_READ_WRITE_TOKEN` is ignored. In production mode, configure a valid Vercel `BLOB_READ_WRITE_TOKEN` on Render.
 
 `CDW_INFERENCE_MODE=prototype` makes `/api/analyze` generate deterministic local mock analysis and does not call `AI_API_URL`, `AI_SERVICE_URL`, localhost inference services, PostgreSQL, or Blob storage. External inference is used only when `CDW_INFERENCE_MODE=production`; then configure `AI_API_URL` or `AI_SERVICE_URL` (for example, `https://ai.example.com`). `NEXT_PUBLIC_AI_API_URL` is also accepted for deployment compatibility, but API keys and service tokens must stay server-only; never put secrets in `NEXT_PUBLIC_*` variables.
 
@@ -49,6 +49,8 @@ npm run db:generate
 ```
 
 Apply the generated migration through your PostgreSQL provider before using `/api/reports`.
+
+For Render Blueprint deployments, [render.yaml](./render.yaml) runs `npm run db:migrate` as the pre-deploy command. The migration command applies the checked-in SQL and then verifies that `public.waste_reports` exists with every column required by the report insert. For an existing manually configured Render service, set the same pre-deploy command in the service settings.
 
 ## Local verification
 

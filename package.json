@@ -13,7 +13,8 @@
     "test:auth": "node --test tests/auth-contract.test.mjs",
     "smoke:analyze": "node scripts/smoke-analyze.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.6.1",

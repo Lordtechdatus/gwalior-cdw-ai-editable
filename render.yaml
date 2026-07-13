@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: gwalior-cdw-ai
+    runtime: node
+    buildCommand: npm ci && npm run build
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    envVars:
+      - key: POSTGRES_URL
+        sync: false
+      - key: CDW_INFERENCE_MODE
+        value: prototype
