@@ -1,9 +1,22 @@
+import { requireRole } from "../../auth/server";
+
 type MaterialDefinition = {
   name: string;
   density: number;
   co2PerM3: number;
   color: string;
 };
+
+const AI_REQUEST_TIMEOUT_MS = 30_000;
+const AI_UNAVAILABLE_MESSAGE =
+  "AI service unavailable. Please start the AI API or try again.";
+
+class AiServiceUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super(AI_UNAVAILABLE_MESSAGE, { cause });
+    this.name = "AiServiceUnavailableError";
+  }
+}
 
 const MATERIALS: MaterialDefinition[] = [
   { name: "Brick", density: 1800, co2PerM3: 240, color: "#d97958" },
@@ -35,30 +48,69 @@ async function callConfiguredInferenceService(
   cameraHeight: number,
   fov: number,
 ) {
-  const baseUrl = process.env.AI_SERVICE_URL?.trim().replace(/\/$/, "");
+  // VITE_AI_API_URL is intentionally read on the server so service tokens and
+  // deployment topology are not exposed to the browser. Localhost is only a
+  // development default; production falls back to the prototype analyser.
+  const prototypeMode =
+    process.env.AI_ANALYSIS_MODE?.trim().toLowerCase() === "prototype" ||
+    process.env.DEMO_OTP_MODE === "true";
+  if (prototypeMode) return null;
+
+  const configuredUrl = process.env.VITE_AI_API_URL?.trim();
+  const baseUrl = (configuredUrl ||
+    (process.env.NODE_ENV === "development" ? "http://localhost:8000" : ""))
+    .replace(/\/$/, "");
   if (!baseUrl) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
 
   const body = new FormData();
   body.append("image", image, image.name);
   body.append("camera_height", String(cameraHeight));
   body.append("fov", String(fov));
 
-  const response = await fetch(`${baseUrl}/v1/analyze`, {
-    method: "POST",
-    headers: process.env.AI_SERVICE_TOKEN
-      ? { authorization: `Bearer ${process.env.AI_SERVICE_TOKEN}` }
-      : undefined,
-    body,
-  });
-  const payload = await response.json();
-  if (!response.ok) {
-    const detail =
-      payload && typeof payload === "object" && "detail" in payload
-        ? String(payload.detail)
-        : "The configured inference service failed.";
-    throw new Error(detail);
+  try {
+    const healthResponse = await fetch(`${baseUrl}/health`, {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!healthResponse.ok) {
+      throw new Error(`Health check returned HTTP ${healthResponse.status}.`);
+    }
+
+    const health = (await healthResponse.json()) as { status?: unknown };
+    if (health.status !== "ok") {
+      throw new Error(`Health check returned status ${String(health.status)}.`);
+    }
+
+    const response = await fetch(`${baseUrl}/v1/analyze`, {
+      method: "POST",
+      headers: process.env.AI_SERVICE_TOKEN
+        ? { authorization: `Bearer ${process.env.AI_SERVICE_TOKEN}` }
+        : undefined,
+      body,
+      signal: controller.signal,
+    });
+    const payload = (await response.json()) as unknown;
+    if (!response.ok) {
+      const detail =
+        payload && typeof payload === "object" && "detail" in payload
+          ? String(payload.detail)
+          : `Analysis returned HTTP ${response.status}.`;
+      throw new Error(detail);
+    }
+    return payload;
+  } catch (error) {
+    console.error("[waste-analysis] AI service request failed", {
+      baseUrl,
+      error,
+    });
+    throw new AiServiceUnavailableError(error);
+  } finally {
+    clearTimeout(timeout);
   }
-  return payload;
 }
 
 export async function POST(request: Request) {
@@ -144,6 +196,10 @@ export async function POST(request: Request) {
         "Deterministic prototype output. Replace this adapter with the validated classification, segmentation, and calibrated depth service before field use.",
     });
   } catch (error) {
+    if (error instanceof AiServiceUnavailableError) {
+      return Response.json({ error: AI_UNAVAILABLE_MESSAGE }, { status: 503 });
+    }
+    console.error("[waste-analysis] Analysis request failed", error);
     return Response.json(
       {
         error: error instanceof Error ? error.message : "Unable to analyse the image.",
@@ -152,4 +208,3 @@ export async function POST(request: Request) {
     );
   }
 }
-import { requireRole } from "../../auth/server";

@@ -1257,18 +1257,26 @@ function NewWasteReport({
     setError(null);
     setLoading(true);
     setAnalysis(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
     try {
       const formData = new FormData();
       formData.append("image", file);
       formData.append("cameraHeight", cameraHeight);
       formData.append("fov", fov);
-      const response = await fetch("/api/analyze", { method: "POST", body: formData });
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
       const payload = (await response.json()) as AnalysisResult & { error?: string };
       if (!response.ok) throw new Error(payload.error ?? "Analysis failed");
       setAnalysis(payload);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to analyse this image.");
+      console.error("[waste-analysis] Unable to analyse the uploaded image", caught);
+      setError("AI service unavailable. Please start the AI API or try again.");
     } finally {
+      window.clearTimeout(timeout);
       setLoading(false);
     }
   }
@@ -1380,11 +1388,15 @@ function NewWasteReport({
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="mt-4 grid min-h-56 w-full place-items-center overflow-hidden rounded-2xl border border-dashed border-[#2ee6a6]/25 bg-[#2ee6a6]/[0.025] transition hover:border-[#2ee6a6]/45 hover:bg-[#2ee6a6]/[0.045]"
+            className="site-image-wrapper mt-4 grid min-h-56 w-full place-items-center overflow-visible rounded-[18px] border border-[#2ee6a6]/35 bg-[#2ee6a6]/[0.025] p-[2px] transition hover:border-[#2ee6a6]/55 hover:bg-[#2ee6a6]/[0.045]"
           >
             {preview ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={preview} alt="Selected C&D waste" className="h-64 w-full object-cover" />
+              <img
+                src={preview}
+                alt="Selected C&D waste"
+                className="site-image block h-auto max-h-[420px] w-full rounded-2xl object-contain object-center"
+              />
             ) : (
               <div className="px-5 text-center">
                 <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#2ee6a6]/10 text-[#2ee6a6]">
