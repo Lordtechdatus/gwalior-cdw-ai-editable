@@ -75,6 +75,7 @@ type MaterialResult = {
 };
 
 type AnalysisResult = {
+  success?: true;
   analysisId: string;
   mode: "prototype" | "model";
   dominantMaterial: string;
@@ -1269,12 +1270,36 @@ function NewWasteReport({
         body: formData,
         signal: controller.signal,
       });
-      const payload = (await response.json()) as AnalysisResult & { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "Analysis failed");
+      const responseText = await response.text();
+      let payload: AnalysisResult | {
+        success: false;
+        error?: string;
+        details?: string;
+      } | null = null;
+
+      try {
+        payload = responseText.trim() ? JSON.parse(responseText) : null;
+      } catch {
+        const serverError = responseText.trim().slice(0, 300);
+        throw new Error(
+          serverError
+            ? `Server returned invalid JSON (HTTP ${response.status}): ${serverError}`
+            : `Server returned invalid JSON with an empty body (HTTP ${response.status}).`,
+        );
+      }
+
+      if (!payload) {
+        throw new Error(`Server returned an empty response (HTTP ${response.status}).`);
+      }
+      if (!response.ok || payload.success === false) {
+        const serverMessage =
+          "details" in payload ? payload.details ?? payload.error : undefined;
+        throw new Error(serverMessage ?? `Analysis failed (HTTP ${response.status}).`);
+      }
       setAnalysis(payload);
     } catch (caught) {
       console.error("[waste-analysis] Unable to analyse the uploaded image", caught);
-      setError("AI service unavailable. Please start the AI API or try again.");
+      setError(caught instanceof Error ? caught.message : "AI analysis failed. Please try again.");
     } finally {
       window.clearTimeout(timeout);
       setLoading(false);

@@ -9,8 +9,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start -p ${PORT:-3000}",
-    "test": "node --test tests/auth-contract.test.mjs",
+    "test": "node --test tests/*.test.mjs",
     "test:auth": "node --test tests/auth-contract.test.mjs",
+    "smoke:analyze": "node scripts/smoke-analyze.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

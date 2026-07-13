@@ -10,6 +10,14 @@ type MaterialDefinition = {
 const AI_REQUEST_TIMEOUT_MS = 30_000;
 const AI_UNAVAILABLE_MESSAGE = "AI analysis service unavailable";
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+class AnalyzeRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnalyzeRequestError";
+  }
+}
 
 class AiServiceUnavailableError extends Error {
   constructor(cause?: unknown) {
@@ -45,20 +53,48 @@ function parseBoundedNumber(
   return Math.min(maximum, Math.max(minimum, raw));
 }
 
-function errorDetails(error: unknown) {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "Unknown server error.";
+function safeErrorDetails(error: unknown) {
+  if (error instanceof AnalyzeRequestError) return error.message;
+  if (error instanceof AiServiceUnavailableError) return AI_UNAVAILABLE_MESSAGE;
+  return "An unexpected server error occurred.";
 }
 
-function serviceUnavailableResponse(error: unknown, status = 500) {
+function analysisErrorResponse(error: unknown) {
   return Response.json(
     {
-      error: AI_UNAVAILABLE_MESSAGE,
-      details: errorDetails(error),
+      success: false,
+      error: "AI analysis failed",
+      details: safeErrorDetails(error),
     },
-    { status },
+    { status: 500 },
   );
+}
+
+function hasExpectedImageSignature(bytes: Uint8Array, type: string) {
+  if (type === "image/jpeg") {
+    return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+  if (type === "image/png") {
+    return (
+      bytes.length >= 8 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47 &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a
+    );
+  }
+  if (type === "image/webp") {
+    return (
+      bytes.length >= 12 &&
+      String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" &&
+      String.fromCharCode(...bytes.slice(8, 12)) === "WEBP"
+    );
+  }
+  return false;
 }
 
 function inferenceMode() {
@@ -139,13 +175,27 @@ async function callConfiguredInferenceService(
       body,
       signal: controller.signal,
     });
-    const payload = (await response.json().catch(() => null)) as unknown;
+    const responseText = await response.text();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(responseText);
+    } catch (error) {
+      throw new Error(
+        responseText.trim()
+          ? `Analysis service returned invalid JSON (HTTP ${response.status}).`
+          : `Analysis service returned an empty response (HTTP ${response.status}).`,
+        { cause: error },
+      );
+    }
     if (!response.ok) {
       const detail =
         payload && typeof payload === "object" && "detail" in payload
           ? String(payload.detail)
           : `Analysis returned HTTP ${response.status}.`;
       throw new Error(detail);
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Analysis service returned an invalid JSON payload.");
     }
     return payload;
   } catch (error) {
@@ -162,16 +212,18 @@ async function callConfiguredInferenceService(
 export async function POST(request: Request) {
   try {
     const authorization = await requireRole(request, ["generator"]);
-    if (!authorization.ok) return authorization.response;
+    if (!authorization.ok) {
+      throw new AnalyzeRequestError(
+        authorization.response.status === 401
+          ? "Authentication is required."
+          : "This account is not authorized to analyze images.",
+      );
+    }
 
     const contentType = request.headers.get("content-type") ?? "";
     if (!contentType.toLowerCase().includes("multipart/form-data")) {
-      return Response.json(
-        {
-          error: "An image file is required.",
-          details: "POST /api/analyze expects multipart/form-data with an image field.",
-        },
-        { status: 415 },
+      throw new AnalyzeRequestError(
+        "POST /api/analyze expects multipart/form-data with an image field.",
       );
     }
 
@@ -179,39 +231,36 @@ export async function POST(request: Request) {
     const image = formData.get("image");
 
     if (!image || typeof image === "string") {
-      return Response.json(
-        {
-          error: "An image file is required.",
-          details: "Upload the image as a multipart file field named image.",
-        },
-        { status: 400 },
-      );
+      throw new AnalyzeRequestError("Upload the image as a multipart file field named image.");
     }
-    if (!image.type.startsWith("image/")) {
-      return Response.json(
-        {
-          error: "Only image uploads are accepted.",
-          details: `Received content type ${image.type || "unknown"}.`,
-        },
-        { status: 415 },
+    if (!SUPPORTED_IMAGE_TYPES.has(image.type.toLowerCase())) {
+      throw new AnalyzeRequestError(
+        "Only JPEG, PNG, and WebP image uploads are accepted.",
       );
     }
     if (image.size === 0 || image.size > MAX_IMAGE_BYTES) {
-      return Response.json(
-        {
-          error: "The image must be between 1 byte and 10 MB.",
-          details: `Received ${image.size} bytes.`,
-        },
-        { status: 413 },
+      throw new AnalyzeRequestError(
+        image.size === 0
+          ? "The uploaded image is empty."
+          : "The uploaded image exceeds the 10 MB limit.",
+      );
+    }
+
+    const bytes = await image.arrayBuffer();
+    const imageBytes = new Uint8Array(bytes);
+    if (!hasExpectedImageSignature(imageBytes, image.type.toLowerCase())) {
+      throw new AnalyzeRequestError(
+        "The uploaded file content does not match its declared image type.",
       );
     }
 
     const cameraHeight = parseBoundedNumber(formData, "cameraHeight", 3, 1, 8);
     const fov = parseBoundedNumber(formData, "fov", 60, 30, 120);
     const serviceResult = await callConfiguredInferenceService(image, cameraHeight, fov);
-    if (serviceResult) return Response.json(serviceResult);
+    if (serviceResult) {
+      return Response.json({ ...serviceResult, success: true });
+    }
 
-    const bytes = await image.arrayBuffer();
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 
     const dominantIndex = digest[0] % MATERIALS.length;
@@ -255,6 +304,7 @@ export async function POST(request: Request) {
       .toUpperCase();
 
     return Response.json({
+      success: true,
       analysisId: `PROTO-${analysisId}`,
       mode: inferenceMode(),
       dominantMaterial,
@@ -270,9 +320,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("[api/analyze] POST failed", error);
-    if (error instanceof AiServiceUnavailableError) {
-      return serviceUnavailableResponse(error.cause ?? error, 503);
-    }
-    return serviceUnavailableResponse(error, 500);
+    return analysisErrorResponse(error);
   }
 }
