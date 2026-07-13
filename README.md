@@ -25,9 +25,10 @@ Copy `.env.example` to `.env.local` and configure:
 ```dotenv
 POSTGRES_URL=postgres://postgres:postgres@localhost:5432/gwalior_cdw
 BLOB_READ_WRITE_TOKEN=
+CDW_INFERENCE_MODE=prototype
 AI_API_URL=
+AI_SERVICE_URL=
 NEXT_PUBLIC_AI_API_URL=
-AI_ANALYSIS_MODE=prototype
 AI_SERVICE_TOKEN=
 DEMO_OTP_MODE=true
 NEXT_PUBLIC_DEMO_OTP_MODE=true
@@ -37,7 +38,7 @@ AUTH_OTP_HASH_SECRET=replace-with-a-long-random-secret
 
 `POSTGRES_URL` (or `DATABASE_URL`) is required for report persistence. `BLOB_READ_WRITE_TOKEN` is required for uploads on Vercel but optional locally. Add the same values in the Vercel project settings before deployment.
 
-`AI_API_URL` configures the optional inference API (for example, `https://ai.example.com`). `NEXT_PUBLIC_AI_API_URL` is also accepted for deployment compatibility, but API keys and service tokens must stay server-only; never put secrets in `NEXT_PUBLIC_*` variables. Set `AI_ANALYSIS_MODE=prototype` or `AI_DEMO_MODE=true` for deterministic demo results without an external AI provider. For external inference, set `AI_ANALYSIS_MODE=production` and configure `AI_API_URL` in production.
+`CDW_INFERENCE_MODE=prototype` makes `/api/analyze` generate deterministic local mock analysis and does not call `AI_API_URL`, `AI_SERVICE_URL`, localhost inference services, PostgreSQL, or Blob storage. External inference is used only when `CDW_INFERENCE_MODE=production`; then configure `AI_API_URL` or `AI_SERVICE_URL` (for example, `https://ai.example.com`). `NEXT_PUBLIC_AI_API_URL` is also accepted for deployment compatibility, but API keys and service tokens must stay server-only; never put secrets in `NEXT_PUBLIC_*` variables.
 
 ## Database
 

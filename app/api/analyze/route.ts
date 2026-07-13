@@ -61,26 +61,24 @@ function serviceUnavailableResponse(error: unknown, status = 500) {
   );
 }
 
-function isPrototypeMode() {
-  const mode = process.env.AI_ANALYSIS_MODE?.trim().toLowerCase();
-  return (
-    mode === "prototype" ||
-    mode === "demo" ||
-    process.env.AI_DEMO_MODE === "true" ||
-    process.env.DEMO_MODE === "true"
-  );
+function inferenceMode() {
+  return process.env.CDW_INFERENCE_MODE?.trim().toLowerCase() === "production"
+    ? "production"
+    : "prototype";
 }
 
 function configuredAiBaseUrl() {
   const configuredUrl =
-    process.env.AI_API_URL?.trim() || process.env.NEXT_PUBLIC_AI_API_URL?.trim();
+    process.env.AI_API_URL?.trim() ||
+    process.env.AI_SERVICE_URL?.trim() ||
+    process.env.NEXT_PUBLIC_AI_API_URL?.trim();
   if (!configuredUrl) return null;
 
   let parsed: URL;
   try {
     parsed = new URL(configuredUrl);
   } catch {
-    throw new Error("AI_API_URL or NEXT_PUBLIC_AI_API_URL must be a valid URL.");
+    throw new Error("AI_API_URL, AI_SERVICE_URL, or NEXT_PUBLIC_AI_API_URL must be a valid URL.");
   }
 
   const isLocalhost =
@@ -99,12 +97,12 @@ async function callConfiguredInferenceService(
   cameraHeight: number,
   fov: number,
 ) {
-  if (isPrototypeMode()) return null;
+  if (inferenceMode() !== "production") return null;
 
   const baseUrl = configuredAiBaseUrl();
   if (!baseUrl) {
     throw new Error(
-      "AI_API_URL or NEXT_PUBLIC_AI_API_URL must be configured unless prototype/demo mode is enabled.",
+      "AI_API_URL, AI_SERVICE_URL, or NEXT_PUBLIC_AI_API_URL must be configured when CDW_INFERENCE_MODE=production.",
     );
   }
 
@@ -258,7 +256,7 @@ export async function POST(request: Request) {
 
     return Response.json({
       analysisId: `PROTO-${analysisId}`,
-      mode: "prototype",
+      mode: inferenceMode(),
       dominantMaterial,
       confidence: round(dominantProbability),
       manualReviewRequired: dominantProbability < 0.7,
