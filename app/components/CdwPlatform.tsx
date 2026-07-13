@@ -1365,12 +1365,16 @@ function NewWasteReport({
 
       const uploadPayload = await readJsonResponse<{
         success?: boolean;
-        objectKey?: string;
+        imageUrl?: string | null;
+        storage?: "prototype-disabled" | "vercel-blob";
         error?: string;
         details?: string;
       }>(uploadResponse, "Image upload");
-      if (!uploadResponse.ok || !uploadPayload.objectKey) {
+      if (!uploadResponse.ok || uploadPayload.success !== true) {
         throw new Error(uploadPayload.details ?? uploadPayload.error ?? "The site image could not be stored.");
+      }
+      if (uploadPayload.storage !== "prototype-disabled" && !uploadPayload.imageUrl) {
+        throw new Error("The image storage response did not include an image URL.");
       }
 
       const reportResponse = await fetch("/api/reports", {
@@ -1382,7 +1386,7 @@ function NewWasteReport({
           ward: location,
           cameraHeightM: Number(cameraHeight),
           horizontalFovDeg: Number(fov),
-          imageObjectKey: uploadPayload.objectKey,
+          imageObjectKey: uploadPayload.imageUrl ?? null,
           analysis,
         }),
       });

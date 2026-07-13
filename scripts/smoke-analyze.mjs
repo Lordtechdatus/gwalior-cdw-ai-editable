@@ -1,4 +1,5 @@
 const baseUrl = (process.argv[2] ?? "http://127.0.0.1:3000").replace(/\/$/, "");
+const skipReport = process.argv.includes("--skip-report");
 const mobile = process.env.SMOKE_TEST_MOBILE ?? "9876543298";
 const otp = process.env.SMOKE_TEST_OTP ?? "123456";
 
@@ -51,10 +52,13 @@ const uploadResponse = await fetch(`${baseUrl}/api/uploads`, {
 });
 const uploadText = await uploadResponse.text();
 const upload = JSON.parse(uploadText);
-if (!uploadResponse.ok || upload.success !== true || !upload.objectKey) {
+if (!uploadResponse.ok || upload.success !== true) {
   throw new Error(
     `Upload failed (HTTP ${uploadResponse.status}): ${upload.details ?? upload.error ?? "unknown error"}`,
   );
+}
+if (upload.storage !== "prototype-disabled" && !upload.imageUrl) {
+  throw new Error("Upload succeeded without an image URL or prototype-disabled storage mode.");
 }
 
 const formData = new FormData();
@@ -88,6 +92,39 @@ if (!payload.analysisId || !Array.isArray(payload.materials) || payload.material
   throw new Error("Analyze JSON is missing the estimate fields required by the review screen.");
 }
 
+let reportStatus = null;
+let reportId = null;
+if (!skipReport) {
+  const reportResponse = await fetch(`${baseUrl}/api/reports`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({
+      siteName: "Render smoke test",
+      ward: "Lashkar",
+      cameraHeightM: 3,
+      horizontalFovDeg: 60,
+      imageObjectKey: upload.imageUrl ?? null,
+      analysis: payload,
+    }),
+  });
+  const reportText = await reportResponse.text();
+  let reportPayload;
+  try {
+    reportPayload = JSON.parse(reportText);
+  } catch {
+    throw new Error(
+      `Report submission returned non-JSON content (HTTP ${reportResponse.status}): ${reportText || "<empty>"}`,
+    );
+  }
+  if (!reportResponse.ok || !reportPayload.report?.id) {
+    throw new Error(
+      `Report confirmation failed (HTTP ${reportResponse.status}): ${reportPayload.error ?? "unknown error"}`,
+    );
+  }
+  reportStatus = reportResponse.status;
+  reportId = reportPayload.report.id;
+}
+
 console.log(
   JSON.stringify(
     {
@@ -97,6 +134,7 @@ console.log(
       authenticated: session.authenticated,
       uploadStatus: uploadResponse.status,
       uploadBodyEmpty: uploadText.length === 0,
+      uploadStorage: upload.storage,
       analyzeStatus: response.status,
       contentType: response.headers.get("content-type"),
       responseBodyEmpty: responseText.length === 0,
@@ -107,6 +145,9 @@ console.log(
       totalVolumeM3: payload.totalVolumeM3,
       totalMassKg: payload.totalMassKg,
       materialRows: payload.materials.length,
+      reportStatus,
+      reportId,
+      reportSkipped: skipReport,
     },
     null,
     2,

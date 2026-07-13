@@ -43,7 +43,7 @@ test("uploads always return JSON for authentication, failure, and success paths"
   const route = await loadTypescriptModule("app/api/uploads/route.ts", [
     [
       'import { put } from "@vercel/blob";',
-      'const put = async () => ({ url: "https://blob.example/site.png" });',
+      'const put = async (...args) => { globalThis.__testPutCalls.push(args); if (globalThis.__testPutError) throw globalThis.__testPutError; return { url: "https://blob.example/site.png" }; };',
     ],
     [
       'import { requireRole } from "../../auth/server";',
@@ -51,8 +51,10 @@ test("uploads always return JSON for authentication, failure, and success paths"
     ],
   ]);
   const originalToken = process.env.BLOB_READ_WRITE_TOKEN;
+  const originalMode = process.env.CDW_INFERENCE_MODE;
   const originalConsoleError = console.error;
   const loggedErrors = [];
+  globalThis.__testPutCalls = [];
   console.error = (...values) => loggedErrors.push(values);
 
   try {
@@ -75,23 +77,63 @@ test("uploads always return JSON for authentication, failure, and success paths"
         body: "not multipart",
       }),
     );
-    assert.equal(malformed.status, 500);
+    assert.equal(malformed.status, 400);
     assert.equal((await malformed.json()).success, false);
     assert.equal(loggedErrors.length, 1);
     assert.ok(loggedErrors[0][1] instanceof Error);
 
-    process.env.BLOB_READ_WRITE_TOKEN = "test-token";
+    process.env.CDW_INFERENCE_MODE = "prototype";
+    process.env.BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_store_secret";
+    const prototype = await route.POST(imageRequest());
+    assert.equal(prototype.status, 200);
+    assert.deepEqual(await prototype.json(), {
+      success: true,
+      imageUrl: null,
+      storage: "prototype-disabled",
+    });
+    assert.equal(globalThis.__testPutCalls.length, 0);
+
+    process.env.CDW_INFERENCE_MODE = "production";
+    delete process.env.BLOB_READ_WRITE_TOKEN;
+    const missingToken = await route.POST(imageRequest());
+    assert.equal(missingToken.status, 503);
+    assert.equal((await missingToken.json()).error, "Image storage is not configured");
+    assert.equal(globalThis.__testPutCalls.length, 0);
+
+    process.env.BLOB_READ_WRITE_TOKEN = "invalid-token";
+    const invalidToken = await route.POST(imageRequest());
+    assert.equal(invalidToken.status, 503);
+    assert.equal((await invalidToken.json()).error, "Image storage is not configured");
+    assert.equal(globalThis.__testPutCalls.length, 0);
+
+    process.env.BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_store_secret";
     const success = await route.POST(imageRequest());
-    const successBody = await success.json();
     assert.equal(success.status, 200);
-    assert.equal(successBody.success, true);
-    assert.equal(successBody.objectKey, "https://blob.example/site.png");
+    assert.deepEqual(await success.json(), {
+      success: true,
+      imageUrl: "https://blob.example/site.png",
+      storage: "vercel-blob",
+    });
+    assert.equal(globalThis.__testPutCalls.length, 1);
+
+    globalThis.__testPutError = new Error(
+      "Vercel Blob: Access denied, please provide a valid token for this resource.",
+    );
+    const rejectedToken = await route.POST(imageRequest());
+    const rejectedBody = await rejectedToken.json();
+    assert.equal(rejectedToken.status, 503);
+    assert.equal(rejectedBody.error, "Image storage token was rejected");
+    assert.match(rejectedBody.details, /Replace the token on Render/);
   } finally {
     console.error = originalConsoleError;
     delete globalThis.__testSession;
     delete globalThis.__testUploadAuthorization;
+    delete globalThis.__testPutCalls;
+    delete globalThis.__testPutError;
     if (originalToken === undefined) delete process.env.BLOB_READ_WRITE_TOKEN;
     else process.env.BLOB_READ_WRITE_TOKEN = originalToken;
+    if (originalMode === undefined) delete process.env.CDW_INFERENCE_MODE;
+    else process.env.CDW_INFERENCE_MODE = originalMode;
   }
 });
 
@@ -102,6 +144,7 @@ test("frontend auth and upload requests use credentialed safe JSON parsing", asy
   assert.match(component, /fetch\("\/api\/auth\/verify-otp", \{[^\n]*credentials: "include"/);
   assert.match(component, /const sessionResponse = await fetch\("\/api\/auth\/session"/);
   assert.match(component, /fetch\("\/api\/uploads", \{[\s\S]*?credentials: "include"/);
+  assert.match(component, /imageObjectKey: uploadPayload\.imageUrl \?\? null/);
   assert.doesNotMatch(
     component.slice(component.indexOf("async function submitReport()"), component.indexOf("return (", component.indexOf("async function submitReport()"))),
     /\.json\(\)/,
