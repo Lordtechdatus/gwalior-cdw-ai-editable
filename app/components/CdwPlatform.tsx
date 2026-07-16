@@ -775,7 +775,7 @@ function OtpVerification({ role, mobile, demoMode, onVerified, onChangeMobile }:
         </div>
       )}
       <p className="mt-5 text-center text-sm text-[#93aaa3]">OTP sent to <span className="font-semibold text-white">+91 {masked}</span></p>
-      {demoMode && <p className="mt-3 text-center text-base font-bold tracking-wide text-[#7aefc2]">Demo OTP: 123456</p>}
+      {demoMode && <p className="mt-3 text-center text-base font-bold tracking-wide text-[#7aefc2]">Enter any 6-digit OTP</p>}
       <form onSubmit={verify} className="mt-7">
         <fieldset disabled={processing}>
           <legend className="sr-only">Six-digit one-time password</legend>

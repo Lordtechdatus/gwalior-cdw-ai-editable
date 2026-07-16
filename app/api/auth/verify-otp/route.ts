@@ -7,7 +7,10 @@ export async function POST(request: Request) {
   const otp = typeof payload.otp === "string" && /^\d{6}$/.test(payload.otp) ? payload.otp : null;
   const role: CdwRole | null = payload.role === "generator" || payload.role === "recycler" || payload.role === "authority" ? payload.role : null;
   if (!mobile || !otp || !role) return noStoreJson({ error: "A selected workspace and complete six-digit OTP are required." }, { status: 400 });
-  const result = isDemoOtpMode() && otp === (process.env.OTP ?? "123456")
+  // Demo deployments deliberately accept any complete six-digit code so the
+  // workspace can be explored without an SMS provider. Real deployments keep
+  // the stored, expiring OTP verification path below.
+  const result = isDemoOtpMode()
     ? { ok: true as const }
     : await verifyOtpValue(mobile, otp, role);
   if (!result.ok) {

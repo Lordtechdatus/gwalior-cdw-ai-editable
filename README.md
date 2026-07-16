@@ -73,7 +73,7 @@ The production server starts at <http://localhost:3000>. For development with ho
 - `GET /api/auth/session`
 - `POST /api/auth/logout`
 
-Demo OTP mode accepts `OTP` (default `123456`) only when `DEMO_OTP_MODE=true`. The value is never returned by the authentication API.
+Demo OTP mode accepts any complete six-digit code only when `DEMO_OTP_MODE=true`. Production mode still verifies the generated, expiring OTP. OTP values are never returned by the authentication API.
 
 After deploying to Render with its database configured, run the authenticated upload, analysis, and report-confirmation smoke test with `npm run smoke:analyze -- https://your-service.onrender.com`. Add `--skip-report` only for environments without report persistence.
 

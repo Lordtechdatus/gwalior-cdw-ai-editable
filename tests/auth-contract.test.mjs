@@ -26,7 +26,7 @@ test("authentication routes and secure session controls are present", async () =
   assert.match(await read("app/api/auth/send-otp/route.ts"), /if \(!role\).*403/s);
 });
 
-test("demo OTP is explicitly development-gated and never returned by an API", async () => {
+test("demo OTP bypass is explicitly development-gated and never returns an OTP from an API", async () => {
   const [example, localEnv, provider, component, sendRoute, verifyRoute] = await Promise.all([
     read(".env.example"),
     read(".env.local"),
@@ -40,9 +40,10 @@ test("demo OTP is explicitly development-gated and never returned by an API", as
   assert.match(localEnv, /NEXT_PUBLIC_DEMO_OTP_MODE=true/);
   assert.match(provider, /process\.env\.DEMO_OTP_MODE === "true"/);
   assert.match(provider, /process\.env\.OTP \?\? "123456"/);
-  assert.match(component, /demoMode && <p[^>]*>Demo OTP: 123456<\/p>/);
+  assert.match(component, /demoMode && <p[^>]*>Enter any 6-digit OTP<\/p>/);
   assert.match(component, /setOtpSent\(true\);\s*onSent\(true\)/);
   assert.match(sendRoute, /success: true, demoMode: true, message: "Demo OTP generated"/);
+  assert.match(verifyRoute, /const result = isDemoOtpMode\(\)\s*\? \{ ok: true as const \}/);
   assert.doesNotMatch(sendRoute, /\{[^}]*otp[,}]/s);
   assert.doesNotMatch(verifyRoute, /console\./);
 });
