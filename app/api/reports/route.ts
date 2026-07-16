@@ -74,18 +74,21 @@ function databaseErrorDetails(sqlState: string | null, message: string) {
 }
 
 export async function GET(request: Request) {
-  const authorization = await requireRole(request, ["generator"]);
+  const authorization = await requireRole(request, ["generator", "recycler", "authority"]);
   if (!authorization.ok) return authorization.response;
   const ownerId = `${authorization.session.mobile}@mobile.nirmalgwalior.in`;
 
   try {
     const db = await getDb();
-    const reports = await db
-      .select()
-      .from(wasteReports)
-      .where(eq(wasteReports.ownerEmail, ownerId))
-      .orderBy(desc(wasteReports.createdAt))
-      .limit(50);
+    const baseQuery = db.select().from(wasteReports);
+    const reports = authorization.session.role === "generator"
+      ? await baseQuery
+          .where(eq(wasteReports.ownerEmail, ownerId))
+          .orderBy(desc(wasteReports.createdAt))
+          .limit(50)
+      : await baseQuery
+          .orderBy(desc(wasteReports.createdAt))
+          .limit(100);
     return Response.json({ reports });
   } catch (error) {
     const diagnostic = databaseDiagnostic(error);

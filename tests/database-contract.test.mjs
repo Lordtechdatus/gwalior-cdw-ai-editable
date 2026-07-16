@@ -104,6 +104,18 @@ test("report insert is transactional and returns a saved report", async () => {
   }
 });
 
+test("recyclers and authorities can read the shared generator report feed", async () => {
+  const route = await read("app/api/reports/route.ts");
+  assert.match(route, /requireRole\(request, \["generator", "recycler", "authority"\]\)/);
+  assert.match(route, /authorization\.session\.role === "generator"/);
+  assert.match(route, /limit\(100\)/);
+  const component = await read("app/components/CdwPlatform.tsx");
+  assert.match(component, /fetch\("\/api\/reports", \{ cache: "no-store", credentials: "include" \}\)/);
+  assert.match(component, /<RecyclerWorkspace activeView=\{activeView\} reports=\{reports\}/);
+  assert.match(component, /report\.imageUrl/);
+  assert.match(component, /Generator submissions/);
+});
+
 test("database failures log original SQLSTATE but return safe JSON", async () => {
   const route = await loadReportsRoute();
   const databaseError = new Error('relation "waste_reports" does not exist');

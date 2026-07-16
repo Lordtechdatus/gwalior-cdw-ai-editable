@@ -101,6 +101,29 @@ type WasteReport = {
   confidence: number;
   generator: string;
   co2: number;
+  area?: number;
+  imageUrl?: string | null;
+  cameraHeightM?: number;
+  horizontalFovDeg?: number;
+  generatorMobile?: string;
+};
+
+type StoredWasteReport = {
+  id: string;
+  ownerEmail: string;
+  siteName: string;
+  ward: string;
+  cameraHeightM: number;
+  horizontalFovDeg: number;
+  imageObjectKey: string | null;
+  dominantMaterial: string;
+  confidence: number;
+  totalAreaM2: number;
+  totalVolumeM3: number;
+  totalMassKg: number;
+  totalCo2Kg: number;
+  status: string;
+  createdAt: string;
 };
 
 const roleDetails: Record<
@@ -227,6 +250,29 @@ const statusTone: Record<ReportStatus, string> = {
   Review: "border-rose-400/20 bg-rose-400/10 text-rose-300",
 };
 
+function mapStoredReport(report: StoredWasteReport): WasteReport {
+  const status = Object.prototype.hasOwnProperty.call(statusTone, report.status)
+    ? report.status as ReportStatus
+    : "Submitted";
+  return {
+    id: report.id,
+    material: report.dominantMaterial,
+    volume: report.totalVolumeM3,
+    mass: report.totalMassKg,
+    location: report.ward,
+    status,
+    date: new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(report.createdAt)),
+    confidence: report.confidence,
+    generator: report.siteName,
+    co2: report.totalCo2Kg,
+    area: report.totalAreaM2,
+    imageUrl: report.imageObjectKey,
+    cameraHeightM: report.cameraHeightM,
+    horizontalFovDeg: report.horizontalFovDeg,
+    generatorMobile: report.ownerEmail.split("@")[0],
+  };
+}
+
 function formatMass(massKg: number) {
   return massKg >= 1000
     ? `${(massKg / 1000).toFixed(2)} t`
@@ -292,6 +338,22 @@ export default function CdwPlatform({ viewer }: { viewer: Viewer }) {
       .finally(() => active && setAuthLoading(false));
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!session.authenticated || !session.role) return;
+    let active = true;
+    fetch("/api/reports", { cache: "no-store", credentials: "include" })
+      .then(async (response) => {
+        const payload = await readJsonResponse<{ reports?: StoredWasteReport[]; error?: string }>(response, "Report feed");
+        if (!response.ok) throw new Error(payload.error ?? "Unable to load submitted reports.");
+        return payload.reports ?? [];
+      })
+      .then((storedReports) => {
+        if (active) setReports(storedReports.map(mapStoredReport));
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [session.authenticated, session.role]);
 
   useEffect(() => {
     const guardHistory = () => {
@@ -1010,7 +1072,7 @@ function Workspace({
             />
           )}
           {role === "recycler" && (
-            <RecyclerWorkspace activeView={activeView} onToast={onToast} />
+            <RecyclerWorkspace activeView={activeView} reports={reports} onToast={onToast} />
           )}
           {role === "authority" && (
             <AuthorityWorkspace activeView={activeView} reports={reports} onToast={onToast} />
@@ -1133,6 +1195,10 @@ function GeneratorWorkspace({
               confidence: analysis.confidence,
               generator: form.siteName,
               co2: analysis.totalCo2Kg,
+              area: analysis.totalAreaM2,
+              imageUrl: form.imageUrl,
+              cameraHeightM: form.cameraHeightM,
+              horizontalFovDeg: form.horizontalFovDeg,
             },
             ...reports,
           ]);
@@ -1268,7 +1334,7 @@ function NewWasteReport({
   onCancel: () => void;
   onSubmitted: (
     analysis: AnalysisResult,
-    form: { siteName: string; location: string },
+    form: { siteName: string; location: string; imageUrl: string | null; cameraHeightM: number; horizontalFovDeg: number },
     persistedId?: string,
   ) => void;
 }) {
@@ -1398,7 +1464,19 @@ function NewWasteReport({
         throw new Error(reportPayload.error ?? "The report could not be saved.");
       }
       persistedId = reportPayload.report.id;
-      onSubmitted(analysis, { siteName, location }, persistedId);
+      const localImageUrl = uploadPayload.imageUrl ?? await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("The selected image could not be prepared for preview."));
+        reader.readAsDataURL(file);
+      });
+      onSubmitted(analysis, {
+        siteName,
+        location,
+        imageUrl: localImageUrl,
+        cameraHeightM: Number(cameraHeight),
+        horizontalFovDeg: Number(fov),
+      }, persistedId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to submit this report.");
     } finally {
@@ -1687,16 +1765,8 @@ function ImpactView() {
   );
 }
 
-function RecyclerWorkspace({ activeView, onToast }: { activeView: string; onToast: (message: string) => void }) {
-  const [jobs, setJobs] = useState([
-    { id: "NG-2026-001", source: "Apex Buildworks", material: "Concrete", mass: 4500, eta: "12 Jul • 09:35", status: "Assigned" },
-    { id: "NG-2026-006", source: "Northern Infra", material: "Brick", mass: 2880, eta: "12 Jul • 11:10", status: "Assigned" },
-    { id: "NG-2026-007", source: "City Renewal Cell", material: "Mixed waste", mass: 6120, eta: "12 Jul • 14:25", status: "Review" },
-  ]);
-  const advance = (id: string) => {
-    setJobs((current) => current.map((job) => job.id === id ? { ...job, status: job.status === "Assigned" ? "Received" : "Processing" } : job));
-    onToast(`${id} status updated`);
-  };
+function RecyclerWorkspace({ activeView, reports, onToast }: { activeView: string; reports: WasteReport[]; onToast: (message: string) => void }) {
+  const totalMass = reports.reduce((sum, report) => sum + report.mass, 0);
 
   if (activeView === "certificates") return <CertificateView onToast={onToast} />;
   if (activeView === "performance") return <ImpactView />;
@@ -1704,18 +1774,30 @@ function RecyclerWorkspace({ activeView, onToast }: { activeView: string; onToas
   return (
     <div className="fade-up space-y-7">
       <PageHeading eyebrow="Recycler operations" title={activeView === "overview" ? "Today’s recovery queue" : "Assigned waste loads"} copy="Verify delivered quantities, document processing, and close the recycling chain with evidence." action={<button onClick={() => onToast("Weighbridge record opened")} className="inline-flex items-center gap-2 rounded-xl bg-[#2ee6a6] px-4 py-3 text-sm font-bold text-[#052018]"><Factory className="h-4 w-4" /> Add weighbridge entry</button>} />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label="Assigned today" value="3 loads" detail="13.5 tonnes expected" icon={Truck} /><MetricCard label="Received" value="2 loads" detail="8.1 tonnes recorded" icon={ClipboardCheck} tone="blue" /><MetricCard label="Recovery rate" value="81%" detail="Seven-day rolling average" icon={Recycle} tone="green" /><MetricCard label="Evidence due" value="1" detail="Certificate incomplete" icon={AlertTriangle} tone="amber" /></div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label="Submitted loads" value={`${reports.length} loads`} detail={`${formatMass(totalMass)} expected`} icon={Truck} /><MetricCard label="With site images" value={String(reports.filter((report) => report.imageUrl).length)} detail="Generator evidence available" icon={ImageIcon} tone="blue" /><MetricCard label="Ready for review" value={String(reports.filter((report) => report.status === "Submitted").length)} detail="New generator submissions" icon={Recycle} tone="green" /><MetricCard label="Manual review" value={String(reports.filter((report) => report.status === "Review").length)} detail="Low-confidence reports" icon={AlertTriangle} tone="amber" /></div>
       <section className="soft-panel rounded-3xl p-5 sm:p-6">
-        <div className="flex items-center justify-between"><div><h2 className="text-sm font-semibold text-white">Incoming loads</h2><p className="mt-1 text-[11px] text-[#668078]">Update only after physical verification</p></div><span className="rounded-full bg-[#2ee6a6]/10 px-3 py-1.5 text-[10px] font-semibold text-[#6feabd]">3 active</span></div>
+        <div className="flex items-center justify-between"><div><h2 className="text-sm font-semibold text-white">Generator submissions</h2><p className="mt-1 text-[11px] text-[#668078]">Images and report details submitted by waste generators</p></div><span className="rounded-full bg-[#2ee6a6]/10 px-3 py-1.5 text-[10px] font-semibold text-[#6feabd]">{reports.length} records</span></div>
         <div className="mt-5 grid gap-3">
-          {jobs.map((job) => (
-            <article key={job.id} className="grid gap-4 rounded-2xl border border-white/8 bg-black/10 p-4 md:grid-cols-[1.2fr_.9fr_.8fr_auto] md:items-center">
-              <div><div className="flex items-center gap-2"><p className="text-xs font-semibold text-white">{job.id}</p><span className="rounded-full bg-white/5 px-2 py-0.5 text-[9px] text-[#8da39d]">{job.material}</span></div><p className="mt-1.5 text-[10px] text-[#607a72]">{job.source}</p></div>
-              <div><p className="text-[10px] text-[#607a72]">Expected quantity</p><p className="mt-1 text-xs font-semibold text-[#d7e7e2]">{formatMass(job.mass)}</p></div>
-              <div><p className="text-[10px] text-[#607a72]">Arrival</p><p className="mt-1 text-xs font-semibold text-[#d7e7e2]">{job.eta}</p></div>
-              <button onClick={() => advance(job.id)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#2ee6a6]/20 bg-[#2ee6a6]/[0.065] px-3 py-2.5 text-xs font-semibold text-[#6feabd] hover:bg-[#2ee6a6]/10">{job.status}<ChevronRight className="h-3.5 w-3.5" /></button>
+          {reports.map((report) => (
+            <article key={report.id} className="overflow-hidden rounded-2xl border border-white/8 bg-black/10">
+              <div className="grid md:grid-cols-[220px_1fr]">
+                <div className="grid min-h-44 place-items-center bg-[#0b1714]">
+                  {report.imageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={report.imageUrl} alt={`Waste submitted for ${report.id}`} className="h-full max-h-64 w-full object-cover" />
+                  ) : <div className="px-4 text-center text-[#58756d]"><ImageIcon className="mx-auto h-7 w-7" /><p className="mt-2 text-[10px]">No stored image</p></div>}
+                </div>
+                <div className="p-4 sm:p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-white">{report.id}</p><span className="rounded-full bg-white/5 px-2 py-0.5 text-[9px] text-[#8da39d]">{report.material}</span></div><p className="mt-1.5 text-xs font-semibold text-[#cfe1dc]">{report.generator}</p><p className="mt-1 text-[10px] text-[#607a72]">{report.location} • submitted {report.date}</p></div><StatusBadge status={report.status} /></div>
+                  <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {[["Estimated mass", formatMass(report.mass)], ["Volume", `${report.volume.toFixed(3)} m³`], ["Area", `${(report.area ?? 0).toFixed(2)} m²`], ["Confidence", `${(report.confidence * 100).toFixed(1)}%`], ["CO₂ indicator", formatCo2(report.co2)], ["Camera height", `${report.cameraHeightM ?? "—"} m`], ["Horizontal FOV", `${report.horizontalFovDeg ?? "—"}°`], ["Generator mobile", report.generatorMobile ? `+91 ${report.generatorMobile}` : "Current session"]].map(([label, value]) => <div key={label} className="rounded-xl bg-white/[0.025] p-3"><p className="text-[9px] text-[#607a72]">{label}</p><p className="mt-1 text-[11px] font-semibold text-[#d7e7e2]">{value}</p></div>)}
+                  </div>
+                  <button onClick={() => onToast(`${report.id} details opened for verification`)} className="mt-4 inline-flex items-center gap-2 rounded-xl border border-[#2ee6a6]/20 bg-[#2ee6a6]/[0.065] px-3 py-2.5 text-xs font-semibold text-[#6feabd] hover:bg-[#2ee6a6]/10"><Eye className="h-3.5 w-3.5" /> Review submission</button>
+                </div>
+              </div>
             </article>
           ))}
+          {reports.length === 0 && <div className="rounded-2xl border border-dashed border-white/10 p-10 text-center"><ImageIcon className="mx-auto h-7 w-7 text-[#58756d]" /><p className="mt-3 text-sm font-semibold text-[#b7cbc5]">No generator submissions yet</p><p className="mt-1 text-xs text-[#607a72]">New waste reports will appear here automatically.</p></div>}
         </div>
       </section>
       <div className="grid gap-5 lg:grid-cols-[1fr_.8fr]"><TrendPanel /><section className="soft-panel rounded-3xl p-5 sm:p-6"><div className="flex items-center justify-between"><h2 className="text-sm font-semibold text-white">Material recovery</h2><Recycle className="h-5 w-5 text-[#2ee6a6]" /></div><div className="mt-6 space-y-4">{[["Concrete", 88, "#2ee6a6"], ["Brick", 81, "#67c8ff"], ["Steel", 96, "#ad8cff"], ["Wood", 64, "#f5b557"], ["Soil", 73, "#a5c778"]].map(([material, value, color]) => <div key={material as string}><div className="flex justify-between text-[11px]"><span className="text-[#a9bdb7]">{material as string}</span><span className="font-semibold text-white">{value as number}%</span></div><div className="mt-2 h-1.5 rounded-full bg-white/5"><div className="h-full rounded-full" style={{ width: `${value}%`, background: color as string }} /></div></div>)}</div></section></div>
